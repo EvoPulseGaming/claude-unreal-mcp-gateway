@@ -1,0 +1,12 @@
+{
+  "name": "claude-unreal-mcp-gateway",
+  "owner": {
+    "name": "Sascha Elble"
+  },
+  "plugins": [
+    {
+      "name": "unreal-mcp-gateway",
+      "source": "./plugins/unreal-mcp-gateway"
+    }
+  ]
+}
