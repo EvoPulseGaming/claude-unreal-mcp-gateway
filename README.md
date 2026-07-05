@@ -30,6 +30,19 @@ editor's own tool-search discovery (no flattened `unreal_<tool>` names, no stati
 route to a specific editor; omit it when only one is open. The full combined toolset (engine AI tool
 packs + the UELLMToolkit moat) flows through this one connection.
 
+## Legacy UE 5.7 support
+
+The gateway also fronts the **older UE 5.7 UELLMToolkit**, which predates the engine-native MCP server:
+it runs a bespoke REST API (`GET /mcp/tools`, `POST /mcp/tool/{name}`, `GET /mcp/status`) on a single
+fixed port (**3000**). The gateway probes that port too, and **adapts** the flat 5.7 tool set behind the
+exact same four meta-tools — it appears as one synthetic **`UELLMToolkit`** toolset, so the agent's
+discovery workflow (and this plugin's skill) is identical whether an editor is 5.7 or 5.8. 5.7 users get
+the same no-restart benefit.
+
+Caveat: the 5.7 plugin binds **one fixed port → one editor**, so only a single 5.7 editor can be live at
+a time (a 5.7 limitation the gateway can't lift). Set `UE_GATEWAY_LEGACY_PORTS` to change the port(s), or
+`UE_GATEWAY_LEGACY_PORTS=""` to disable legacy discovery.
+
 ## Install
 
 Zero-step — the gateway is pure Node.js (built-ins only), so there is **nothing to `npm install`**.

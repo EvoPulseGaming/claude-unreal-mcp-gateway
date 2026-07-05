@@ -32,6 +32,16 @@ packs are `Plugin.ToolsetClass` (e.g. `EditorToolset.LogsToolset`); the UELLMToo
 `UELLMToolkit`. The agent discovers and invokes everything — engine packs and the moat alike — through
 these meta-tools; nothing is pre-flattened into `unreal_<tool>` names.
 
+## Legacy UE 5.7 editors
+
+The gateway also discovers the **older UE 5.7 UELLMToolkit**, which used a bespoke REST server
+(`GET /mcp/tools`, `POST /mcp/tool/{name}`, `GET /mcp/status`) on a single fixed port (**3000**) instead
+of the engine-native MCP. The gateway probes that port and **adapts** the flat 5.7 tool set behind the
+same four meta-tools, surfacing it as one synthetic `UELLMToolkit` toolset — so discovery/calling is
+identical to a 5.8 editor and 5.7 users also get no-restart. Because the 5.7 plugin binds one fixed port,
+only one 5.7 editor can be live at a time. Tunables: `UE_GATEWAY_LEGACY_PORTS` (comma-separated ports,
+default `3000`; empty disables legacy discovery).
+
 ## Dependencies
 
 **None.** The gateway is pure Node.js (>=18) — it speaks MCP (JSON-RPC over stdio + Streamable HTTP)

@@ -137,6 +137,41 @@ export class HttpClient {
   }
 }
 
+// ── Downstream: legacy UE 5.7 REST client ──────────────────────────────────────
+// The 5.7 UELLMToolkit exposes a bespoke REST API (NOT JSON-RPC MCP): GET /mcp/tools,
+// POST /mcp/tool/{name}, GET /mcp/status. Stateless — no initialize, no session id, no SSE.
+export class LegacyHttpClient {
+  constructor(baseUrl, defaultTimeoutMs = 30000) {
+    this.baseUrl = String(baseUrl).replace(/\/+$/, ""); // e.g. http://127.0.0.1:3000
+    this.defaultTimeoutMs = defaultTimeoutMs;
+  }
+
+  status(timeoutMs)            { return this._json("GET", "/mcp/status", null, timeoutMs); }
+  async listTools(timeoutMs)   { const d = await this._json("GET", "/mcp/tools", null, timeoutMs); return Array.isArray(d?.tools) ? d.tools : []; }
+  callTool(name, args, timeoutMs) { return this._json("POST", `/mcp/tool/${encodeURIComponent(name)}`, args || {}, timeoutMs); }
+  async close() { /* stateless REST — nothing to tear down */ }
+
+  async _json(method, path, body, timeoutMs = this.defaultTimeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const opts = { method, headers: { "Accept": "application/json" }, signal: controller.signal };
+      if (body != null) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+      const res = await fetch(`${this.baseUrl}${path}`, opts);
+      const text = await res.text();
+      // The 5.7 server returns a JSON body even for tool errors (success:false, HTTP 400), so parse
+      // regardless of status and let the caller read `success` — only a non-JSON body is a transport fault.
+      let data; try { data = text ? JSON.parse(text) : {}; } catch { data = null; }
+      if (data === null) {
+        throw new Error(`legacy editor ${method} ${path} → HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : " (non-JSON body)"}`);
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 const MAX_SSE_BYTES = 16 * 1024 * 1024; // hard cap so a never-framed SSE stream can't grow the buffer unboundedly
 
 /** Read an SSE response stream and resolve on the first JSON-RPC reply for `id` (then cancel). */

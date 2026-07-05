@@ -65,3 +65,9 @@ engine's tool-search meta-tools (`list_toolsets`/`describe_toolset`/`call_tool`)
 always-on process that scans those ports, parses each editor's identity, and **forwards** your
 discovery/call to the chosen editor — adding multi-editor routing (`editor`) and no-restart. It flattens
 nothing; whatever the editor registers, you see.
+
+**Legacy UE 5.7 editors:** the gateway also fronts the older UE 5.7 UELLMToolkit (a REST server on port
+3000, one editor at a time). You don't do anything different — it appears as a normal editor whose tools
+live under a single `UELLMToolkit` toolset, so the same `list_toolsets` → `describe_toolset` → `call_tool`
+workflow just works. (A 5.7 editor has no separate engine tool packs; only `UELLMToolkit`.) You can tell
+it apart in `list_editors` by its UE version (`5.7…`).

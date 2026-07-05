@@ -19,7 +19,7 @@
 
 import { StdioServer } from "./mcp.js";
 import { EditorClient } from "./editor.js";
-import { log, ports, tcpProbe, BASE_PORT, SCAN_INTERVAL_MS, CALL_TIMEOUT_MS } from "./lib.js";
+import { log, scanPorts, tcpProbe, BASE_PORT, SCAN_INTERVAL_MS, CALL_TIMEOUT_MS } from "./lib.js";
 
 const META_TIMEOUT_MS = 30000; // list_toolsets / describe_toolset (call_tool uses CALL_TIMEOUT_MS)
 const IDENTITY_REVERIFY_EVERY = 8; // every Nth scan, re-confirm an alive editor's identity (catches silent port-reuse)
@@ -33,7 +33,7 @@ let scanCount = 0;
 
 // ── Discovery scanner ─────────────────────────────────────────────────────────
 async function scanOnce(server) {
-  const all = ports();
+  const all = scanPorts(); // native auto-port range + any legacy (5.7) ports
   const open = await Promise.all(all.map((p) => tcpProbe(p)));
   const reverify = (++scanCount % IDENTITY_REVERIFY_EVERY) === 0;
   let changed = false;
@@ -61,7 +61,13 @@ async function scanOnce(server) {
       // Periodically re-confirm identity: on a pid change rebind; on failure, let it reconnect.
       try {
         if (await existing.reverifyIdentity()) { changed = true; log.info("editor changed on reused port", { port, pid: existing.identity?.pid }); }
-      } catch (e) { existing.alive = false; log.debug("identity reverify failed; will reconnect", { port, error: e.message }); }
+      } catch (e) {
+        // A per-call timeout (AbortError) doesn't prove the editor is gone — a busy editor mid-long-op can
+        // miss the 4s reverify deadline. Mirror forward()'s rule: keep the session on AbortError, only mark
+        // dead (→ reconnect next scan) on a hard fault, so we don't churn a healthy-but-busy editor.
+        if (e?.name !== "AbortError") { existing.alive = false; log.debug("identity reverify failed; will reconnect", { port, error: e.message }); }
+        else log.debug("identity reverify timed out; keeping session", { port });
+      }
     }
   }
   if (changed) {
@@ -166,12 +172,12 @@ const FORWARDED = new Set(["list_toolsets", "describe_toolset", "call_tool"]);
 
 // ── MCP front server ────────────────────────────────────────────────────────────
 function buildServer() {
-  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.0.0" });
+  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.1.0" });
 
   server.on("initialize", (params) => ({
     protocolVersion: params?.protocolVersion || "2025-03-26",
     capabilities: { tools: { listChanged: true } },
-    serverInfo: { name: "ue-mcp-gateway", version: "2.0.0" },
+    serverInfo: { name: "ue-mcp-gateway", version: "2.1.0" },
   }));
   server.on("notifications/initialized", () => {});
   server.on("ping", () => ({}));
