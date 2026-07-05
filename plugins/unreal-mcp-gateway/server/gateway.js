@@ -173,12 +173,12 @@ const FORWARDED = new Set(["list_toolsets", "describe_toolset", "call_tool"]);
 
 // ── MCP front server ────────────────────────────────────────────────────────────
 function buildServer() {
-  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.2.0" });
+  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.2.1" });
 
   server.on("initialize", (params) => ({
     protocolVersion: params?.protocolVersion || "2025-03-26",
     capabilities: { tools: { listChanged: true } },
-    serverInfo: { name: "ue-mcp-gateway", version: "2.2.0" },
+    serverInfo: { name: "ue-mcp-gateway", version: "2.2.1" },
   }));
   server.on("notifications/initialized", () => {});
   server.on("ping", () => ({}));

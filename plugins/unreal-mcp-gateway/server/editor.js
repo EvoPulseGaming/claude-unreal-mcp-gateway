@@ -60,7 +60,7 @@ export class EditorClient {
   }
 
   async _connectNative() {
-    this.client = new HttpClient(this.url, { name: "ue-mcp-gateway", version: "2.2.0" }, CALL_TIMEOUT_MS);
+    this.client = new HttpClient(this.url, { name: "ue-mcp-gateway", version: "2.2.1" }, CALL_TIMEOUT_MS);
     await this.client.connect(CONNECT_TIMEOUT_MS);
 
     const listing = await this.client.call("tools/call", { name: "list_toolsets", arguments: {} }, CONNECT_TIMEOUT_MS);

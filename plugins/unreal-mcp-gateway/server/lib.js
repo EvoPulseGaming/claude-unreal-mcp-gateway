@@ -36,10 +36,13 @@ function parseLegacyPorts(env, dflt) {
 export function isNativePort(port) { return port >= BASE_PORT && port < BASE_PORT + PORT_RANGE; }
 export function isLegacyPort(port) { return LEGACY_PORTS.includes(port); }
 
-// Byte budget for a single describe_toolset result. The MCP client caps a tool result at
-// ~MAX_MCP_OUTPUT_TOKENS tokens (Claude Code default 25000 ≈ ~100KB); we tier well under that so a
-// large toolset (native or legacy) never gets truncated. ~80KB ≈ ~20-24K tokens depending on density.
-export const DESCRIBE_MAX_BYTES = parseInt(process.env.UE_GATEWAY_DESCRIBE_MAX_BYTES, 10) || 80000;
+// Byte budget for a single describe_toolset result. The MCP client caps a tool result on TOKENS
+// (Claude Code MAX_MCP_OUTPUT_TOKENS default 25000) and also files-away very large outputs. UE schema
+// JSON is dense (~3 bytes/token), and empirically a ~34KB describe returns inline while ~62KB is
+// filed away — so 40KB keeps results inline AND well under the token cap. Oversized toolsets fall back
+// to the catalog tier here (use describe_toolset { tool_name } for a specific tool's full schema).
+// Raise it (or the client's MAX_MCP_OUTPUT_TOKENS) for richer describes; lower it for CJK/localized text.
+export const DESCRIBE_MAX_BYTES = parseInt(process.env.UE_GATEWAY_DESCRIBE_MAX_BYTES, 10) || 40000;
 
 // Logs go to stderr so they never corrupt the JSON-RPC stdout stream.
 export const log = {
