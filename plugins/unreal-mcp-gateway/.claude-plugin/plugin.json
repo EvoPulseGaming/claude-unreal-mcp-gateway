@@ -1,6 +1,6 @@
 {
   "name": "unreal-mcp-gateway",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Auto-discovers every running Unreal editor's native MCP server (127.0.0.1:8000-8031) and fronts them behind one always-alive connection, so editors can open or close without restarting Claude. Forwards the engine's own tool discovery (list_toolsets / describe_toolset / call_tool) — each editor's native AI packs plus the project's UELLMToolkit — routed by editor. Also fronts the legacy UE 5.7 UELLMToolkit REST plugin (port 3000), adapted behind the same tools. Zero-dependency Node; no install.",
   "author": {
     "name": "Sascha Elble"

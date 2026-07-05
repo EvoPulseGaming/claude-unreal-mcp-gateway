@@ -142,11 +142,12 @@ const FRONT_TOOLS = [
   },
   {
     name: "describe_toolset",
-    description: "Get the tools (names + input schemas) for one toolset on an editor.",
+    description: "Get the tools (names + input schemas) for one toolset on an editor. A large toolset (e.g. a native NiagaraToolset, or a legacy UE 5.7 editor's ~40-tool UELLMToolkit) is automatically condensed to fit the response — descriptions shortened to their first line and output schemas dropped, then names-only if still too big. Pass 'tool_name' to get one tool's full, untruncated description + schema.",
     inputSchema: {
       type: "object",
       properties: {
         toolset_name: { type: "string", description: "Toolset name from list_toolsets (e.g. 'EditorAppToolset', 'UELLMToolkit')." },
+        tool_name: { type: "string", description: "Optional. Narrow to a single tool and return its full (untruncated) description + input schema." },
         editor: EDITOR_ARG,
       },
       required: ["toolset_name"],
@@ -172,12 +173,12 @@ const FORWARDED = new Set(["list_toolsets", "describe_toolset", "call_tool"]);
 
 // ── MCP front server ────────────────────────────────────────────────────────────
 function buildServer() {
-  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.1.0" });
+  const server = new StdioServer({ name: "ue-mcp-gateway", version: "2.2.0" });
 
   server.on("initialize", (params) => ({
     protocolVersion: params?.protocolVersion || "2025-03-26",
     capabilities: { tools: { listChanged: true } },
-    serverInfo: { name: "ue-mcp-gateway", version: "2.1.0" },
+    serverInfo: { name: "ue-mcp-gateway", version: "2.2.0" },
   }));
   server.on("notifications/initialized", () => {});
   server.on("ping", () => ({}));

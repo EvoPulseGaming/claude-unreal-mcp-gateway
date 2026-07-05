@@ -20,7 +20,7 @@ import {
   log, parseIdentity, resultText, URL_PATH,
   CONNECT_TIMEOUT_MS, CALL_TIMEOUT_MS,
   isNativePort, isLegacyPort,
-  isLegacyStatus, legacyStatusToIdentity, legacyParamsToInputSchema,
+  isLegacyStatus, legacyStatusToIdentity, legacyParamsToInputSchema, capDescribe,
 } from "./lib.js";
 
 // The synthetic toolset a legacy (5.7) editor's flat tools are presented under, so the agent's
@@ -60,7 +60,7 @@ export class EditorClient {
   }
 
   async _connectNative() {
-    this.client = new HttpClient(this.url, { name: "ue-mcp-gateway", version: "2.1.0" }, CALL_TIMEOUT_MS);
+    this.client = new HttpClient(this.url, { name: "ue-mcp-gateway", version: "2.2.0" }, CALL_TIMEOUT_MS);
     await this.client.connect(CONNECT_TIMEOUT_MS);
 
     const listing = await this.client.call("tools/call", { name: "list_toolsets", arguments: {} }, CONNECT_TIMEOUT_MS);
@@ -94,14 +94,33 @@ export class EditorClient {
   }
 
   async _forwardNative(metaTool, args, timeoutMs) {
+    let fwdArgs = args || {};
+    // `tool_name` on describe_toolset is a gateway-side convenience for narrowing a toolset — the engine's
+    // native describe_toolset doesn't take it. Strip it before forwarding; the gateway does the narrowing.
+    if (metaTool === "describe_toolset" && fwdArgs.tool_name !== undefined) {
+      fwdArgs = { ...fwdArgs };
+      delete fwdArgs.tool_name;
+    }
+    let res;
     try {
-      return await this.client.call("tools/call", { name: metaTool, arguments: args || {} }, timeoutMs || CALL_TIMEOUT_MS);
+      res = await this.client.call("tools/call", { name: metaTool, arguments: fwdArgs }, timeoutMs || CALL_TIMEOUT_MS);
     } catch (e) {
       // A per-call timeout (AbortError) doesn't prove the editor is gone — surface it but KEEP the
       // session; the TCP scan + next call catch a genuinely dead one. Hard faults → mark dead.
       if (e?.name !== "AbortError") this.alive = false;
       throw e;
     }
+    // Cap a (possibly huge) engine describe result so it never blows the client's per-result token
+    // budget — the same tiering legacy gets. If the engine result isn't the expected JSON, pass through.
+    if (metaTool === "describe_toolset") {
+      const text = resultText(res);
+      let parsed; try { parsed = JSON.parse(text); } catch { /* not JSON — leave as-is */ }
+      if (parsed && Array.isArray(parsed.tools)) {
+        const { text: capped } = capDescribe(parsed, { toolName: args?.tool_name, rawText: text });
+        return { content: [{ type: "text", text: capped }], isError: !!res.isError };
+      }
+    }
+    return res;
   }
 
   /**
@@ -129,7 +148,9 @@ export class EditorClient {
             text: `This legacy UE 5.7 editor exposes only the '${LEGACY_TOOLSET}' toolset (a flat tool set); '${requested}' is not available here.` }] };
         }
         const tools = await this.legacy.listTools(timeout);
-        const shaped = {
+        // Build the FULL result; capDescribe tiers it (full/summary/catalog) and handles tool_name —
+        // the same path a native editor's describe goes through, so behavior is identical across modes.
+        const full = {
           toolset: LEGACY_TOOLSET,
           tools: tools.map((t) => ({
             name: t.name,
@@ -138,7 +159,8 @@ export class EditorClient {
             ...(t.annotations ? { annotations: t.annotations } : {}),
           })),
         };
-        return { content: [{ type: "text", text: JSON.stringify(shaped, null, 2) }] };
+        const { text } = capDescribe(full, { toolName: args?.tool_name });
+        return { content: [{ type: "text", text }] };
       }
 
       if (metaTool === "call_tool") {

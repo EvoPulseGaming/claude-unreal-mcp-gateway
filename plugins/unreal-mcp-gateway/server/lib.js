@@ -36,6 +36,11 @@ function parseLegacyPorts(env, dflt) {
 export function isNativePort(port) { return port >= BASE_PORT && port < BASE_PORT + PORT_RANGE; }
 export function isLegacyPort(port) { return LEGACY_PORTS.includes(port); }
 
+// Byte budget for a single describe_toolset result. The MCP client caps a tool result at
+// ~MAX_MCP_OUTPUT_TOKENS tokens (Claude Code default 25000 ≈ ~100KB); we tier well under that so a
+// large toolset (native or legacy) never gets truncated. ~80KB ≈ ~20-24K tokens depending on density.
+export const DESCRIBE_MAX_BYTES = parseInt(process.env.UE_GATEWAY_DESCRIBE_MAX_BYTES, 10) || 80000;
+
 // Logs go to stderr so they never corrupt the JSON-RPC stdout stream.
 export const log = {
   info: (msg, data) => console.error(`[gateway] ${msg}`, data ? JSON.stringify(data) : ""),
@@ -143,6 +148,122 @@ export function legacyStatusToIdentity(status, port) {
     pid: 0,                 // the 5.7 REST /mcp/status doesn't expose a pid
     port,
   };
+}
+
+/** First line (≤200 chars) of a description — used to summarize large toolsets so 40+ verbose tools fit. */
+export function firstLine(s) {
+  const l = String(s || "").split("\n")[0].trim();
+  return l.length > 200 ? `${l.slice(0, 200)}…` : l;
+}
+
+const byteLen = (s) => Buffer.byteLength(String(s), "utf8");
+
+/** First candidate (built lazily, richest→leanest) whose serialized size fits `max`; else the leanest. */
+function pickFitting(builders, max) {
+  let last = "";
+  for (const build of builders) {
+    last = build();
+    if (byteLen(last) <= max) return last;
+  }
+  return last; // none fit → the leanest builder, which the callers construct to be self-bounding
+}
+
+// A catalog row is bounded on its own: name + first-line description + at most MAX_REQ required-param
+// names (so one tool with a pathologically long `required[]` can't blow the row up).
+const MAX_CATALOG_REQUIRED = 24;
+function catalogRow(t) {
+  const req = (t?.inputSchema && Array.isArray(t.inputSchema.required)) ? t.inputSchema.required : [];
+  const shown = req.slice(0, MAX_CATALOG_REQUIRED);
+  return {
+    name: String(t?.name ?? ""),
+    description: firstLine(t?.description),
+    required: shown,
+    ...(req.length > shown.length ? { requiredMore: req.length - shown.length } : {}),
+  };
+}
+
+/**
+ * Cap a describe_toolset result so a single tool result NEVER exceeds the MCP client's per-result budget
+ * (approximated by DESCRIBE_MAX_BYTES; the client cap is token-based, so keep the byte budget below
+ * ~3.2× the token cap — lower it further for CJK/localized toolsets where bytes-per-token is smaller).
+ * Uniform for native and legacy — both expose the same shape:
+ *   { name|toolset, version?, description?, tools: [{ name, description, inputSchema, outputSchema?, annotations? }] }
+ * Every tier below is bounded; the LAST builder in each chain is self-limiting, so the result always fits.
+ * Returns { text } from the richest tier that fits:
+ *   opts.toolName → one tool: full → drop outputSchema → schema-only (desc/output trimmed) → required-only
+ *   whole toolset → full (native verbatim / legacy pretty) → summary (1st-line desc + inputSchema, no
+ *                   outputSchema) → catalog (names + 1st-line desc + required) → truncated catalog (first K tools)
+ */
+export function capDescribe(obj, opts = {}) {
+  const max = opts.maxBytes || DESCRIBE_MAX_BYTES;
+  const tools = Array.isArray(obj?.tools) ? obj.tools : [];
+  const head = {};
+  for (const key of ["toolset", "name", "version", "description"]) {
+    if (obj?.[key] !== undefined) head[key] = obj[key];
+  }
+
+  // Narrow to ONE tool. Match the bare name (case-insensitively) or a toolset-qualified engine name by
+  // its suffix (e.g. "SetVerbosity" → "EditorToolset.LogsToolset.SetVerbosity"). If a bare suffix is
+  // ambiguous across sub-namespaces, disambiguate rather than silently returning the first hit.
+  if (opts.toolName != null && String(opts.toolName).trim() !== "") {
+    const want = String(opts.toolName).trim().toLowerCase();
+    let t = tools.find((x) => String(x.name).toLowerCase() === want);
+    if (!t) {
+      const suffixed = tools.filter((x) => String(x.name).toLowerCase().endsWith(`.${want}`));
+      if (suffixed.length > 1) {
+        return { text: `Tool name '${opts.toolName}' is ambiguous in this toolset — matches: ${suffixed.map((x) => x.name).join(", ")}. Pass one of those fully-qualified names.` };
+      }
+      t = suffixed[0];
+    }
+    if (!t) return { text: `Tool '${opts.toolName}' not found in this toolset. Call describe_toolset without tool_name to list its tools.` };
+    return { text: pickFitting([
+      () => JSON.stringify({ ...head, tools: [t] }, null, 2),                                              // full
+      () => JSON.stringify({ ...head, tools: [{ ...t, outputSchema: undefined }] }, null, 2),              // drop outputSchema
+      () => JSON.stringify({ ...head, note: "Trimmed to fit: description shortened, output schema omitted.",
+        tools: [{ name: t.name, description: firstLine(t.description), inputSchema: t.inputSchema }] }),    // schema-only
+      () => JSON.stringify({ ...head, note: `Tool '${t.name}' has a schema too large to return in one result; showing required params only.`,
+        tools: [catalogRow(t)] }),                                                                         // required-only (bounded)
+    ], max) };
+  }
+
+  return { text: pickFitting([
+    // Tier 1: full — native verbatim (rawText), legacy pretty.
+    () => opts.rawText != null ? String(opts.rawText) : JSON.stringify({ ...head, tools }, null, 2),
+    // Tier 2: summary — full inputSchema (needed to call), first-line descriptions, drop outputSchema.
+    () => JSON.stringify({
+      ...head,
+      note: `Summarized to fit: descriptions shortened to their first line and output schemas omitted. Call describe_toolset { toolset_name, tool_name: "<name>" } for one tool's full detail.`,
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: firstLine(t.description),
+        inputSchema: t.inputSchema,
+        ...(t.annotations ? { annotations: t.annotations } : {}),
+      })),
+    }),
+    // Tier 3: catalog — names + first-line descriptions + (bounded) required params.
+    () => JSON.stringify({
+      ...head,
+      note: `Catalog only — this toolset (${tools.length} tools) is too large for full schemas in one result. Call describe_toolset { toolset_name, tool_name: "<name>" } for a specific tool's schema.`,
+      tools: tools.map(catalogRow),
+    }),
+    // Tier 4: truncated catalog — the first K rows that fit. Self-bounding, so the chain always fits.
+    () => truncatedCatalog(head, tools, max),
+  ], max) };
+}
+
+/** Largest prefix of catalog rows that fits `max`, with a note saying how many were omitted. Always ≤ max. */
+function truncatedCatalog(head, tools, max) {
+  const rows = tools.map(catalogRow);
+  const envelope = (k) => ({
+    ...head,
+    note: k < rows.length
+      ? `Showing ${k} of ${rows.length} tools (rest omitted to fit). Call describe_toolset { toolset_name, tool_name: "<name>" } for any specific tool.`
+      : `${rows.length} tools.`,
+    tools: rows.slice(0, k),
+  });
+  let k = rows.length;
+  while (k > 0 && byteLen(JSON.stringify(envelope(k))) > max) k--;
+  return JSON.stringify(envelope(k));
 }
 
 /** Convert a 5.7 tool's `parameters` array (from GET /mcp/tools) into a JSON-Schema inputSchema. */
